@@ -30,11 +30,12 @@ import org.comixed.adaptors.archive.ArchiveAdaptorException;
 import org.comixed.handlers.ComicFileHandlerException;
 import org.comixed.model.library.Comic;
 import org.comixed.model.library.ComicFormat;
+import org.comixed.model.library.Page;
 import org.comixed.model.library.ScanType;
 import org.comixed.model.user.LastReadDate;
 import org.comixed.net.GetLibraryUpdatesRequest;
 import org.comixed.net.GetLibraryUpdatesResponse;
-import org.comixed.repositories.*;
+import org.comixed.repositories.ComiXedUserRepository;
 import org.comixed.repositories.library.ComicFormatRepository;
 import org.comixed.repositories.library.ComicRepository;
 import org.comixed.repositories.library.LastReadDatesRepository;
@@ -42,6 +43,7 @@ import org.comixed.repositories.library.ScanTypeRepository;
 import org.comixed.service.file.FileService;
 import org.comixed.service.library.ComicException;
 import org.comixed.service.library.ComicService;
+import org.comixed.service.library.PageCacheService;
 import org.comixed.task.model.DeleteComicsWorkerTask;
 import org.comixed.task.runner.Worker;
 import org.comixed.utils.FileTypeIdentifier;
@@ -65,6 +67,7 @@ public class ComicController {
   protected final Logger logger = LoggerFactory.getLogger(this.getClass());
 
   @Autowired private ComicService comicService;
+  @Autowired private PageCacheService pageCacheService;
   @Autowired private FileService fileService;
   @Autowired private FileTypeIdentifier fileTypeIdentifier;
   @Autowired private ComicRepository comicRepository;
@@ -76,7 +79,7 @@ public class ComicController {
   @Autowired private Worker worker;
   @Autowired private ObjectFactory<DeleteComicsWorkerTask> deleteComicsWorkerTaskFactory;
 
-  @DeleteMapping(value = "/{id}", produces = "application/json")
+  @DeleteMapping(value = "/{id}", produces = MediaType.APPLICATION_JSON_VALUE)
   @JsonView({View.ComicDetails.class})
   public Comic deleteComic(@PathVariable("id") long id) throws ComicException {
     this.logger.info("Marking comic for deletion: id={}", id);
@@ -151,7 +154,7 @@ public class ComicController {
         .body(new InputStreamResource(new ByteArrayInputStream(content)));
   }
 
-  @GetMapping(value = "/{id}", produces = "application/json")
+  @GetMapping(value = "/{id}", produces = MediaType.APPLICATION_JSON_VALUE)
   @JsonView(ComicDetails.class)
   public Comic getComic(@PathVariable("id") long id) throws ComicException {
     this.logger.info("Getting comic: id={}", id);
@@ -173,8 +176,8 @@ public class ComicController {
 
   @PostMapping(
       value = "/since/{timestamp}",
-      produces = "application/json",
-      consumes = "application/json")
+      produces = MediaType.APPLICATION_JSON_VALUE,
+      consumes = MediaType.APPLICATION_JSON_VALUE)
   @JsonView(View.ComicList.class)
   public GetLibraryUpdatesResponse getComicsUpdatedSince(
       Principal principal,
@@ -309,7 +312,10 @@ public class ComicController {
     }
   }
 
-  @PutMapping(value = "/{id}", produces = "application/json", consumes = "application/json")
+  @PutMapping(
+      value = "/{id}",
+      produces = MediaType.APPLICATION_JSON_VALUE,
+      consumes = MediaType.APPLICATION_JSON_VALUE)
   @JsonView(View.ComicDetails.class)
   public Comic updateComic(@PathVariable("id") long id, @RequestBody() Comic comic) {
     this.logger.info("Updating comic: id={}", id, comic);
@@ -325,7 +331,7 @@ public class ComicController {
 
   @GetMapping(value = "/{id}/cover/content")
   public ResponseEntity<byte[]> getCoverImage(@PathVariable("id") final long id)
-      throws ComicException, ArchiveAdaptorException, ComicFileHandlerException {
+      throws ComicException, ArchiveAdaptorException, ComicFileHandlerException, IOException {
     this.logger.info("Getting cover for comic: id={}", id);
     final Comic comic = this.comicService.getComic(id);
 
@@ -335,7 +341,14 @@ public class ComicController {
 
     if (comic.getPageCount() > 0) {
       final String filename = comic.getPage(0).getFilename();
-      final byte[] content = comic.getPage(0).getContent();
+      final Page page = comic.getPage(0);
+      this.logger.debug("Looking for cached image: hash={}", page.getHash());
+      byte[] content = this.pageCacheService.findByHash(page.getHash());
+      if (content == null) {
+        this.logger.debug("Loading page from archive");
+        content = comic.getPage(0).getContent();
+        this.pageCacheService.saveByHash(page.getHash(), content);
+      }
       this.logger.debug("Returning comic cover: filename={} size={}", filename, content.length);
       return this.getResponseEntityForImage(content, filename);
     } else {
@@ -358,7 +371,10 @@ public class ComicController {
         .body(content);
   }
 
-  @PutMapping(value = "/{id}/restore", produces = "application/json", consumes = "application/json")
+  @PutMapping(
+      value = "/{id}/restore",
+      produces = MediaType.APPLICATION_JSON_VALUE,
+      consumes = MediaType.APPLICATION_JSON_VALUE)
   @JsonView(View.ComicDetails.class)
   public Comic restoreComic(@PathVariable("id") final long id) throws ComicException {
     this.logger.info("Restoring comic: id={}", id);
