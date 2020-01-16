@@ -18,17 +18,8 @@
 
 package org.comixed.repositories.library;
 
-import static org.junit.Assert.*;
-
 import com.github.springtestdbunit.DbUnitTestExecutionListener;
 import com.github.springtestdbunit.annotation.DatabaseSetup;
-import java.io.File;
-import java.io.IOException;
-import java.util.Calendar;
-import java.util.Date;
-import java.util.GregorianCalendar;
-import java.util.List;
-import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang.time.DateUtils;
 import org.comixed.model.library.Comic;
 import org.comixed.model.library.ComicFormat;
@@ -50,6 +41,12 @@ import org.springframework.test.context.support.DependencyInjectionTestExecution
 import org.springframework.test.context.support.DirtiesContextTestExecutionListener;
 import org.springframework.test.context.transaction.TransactionalTestExecutionListener;
 
+import java.util.Calendar;
+import java.util.Date;
+import java.util.List;
+
+import static org.junit.Assert.*;
+
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = RepositoryContext.class)
 @TestPropertySource(locations = "classpath:application.properties")
@@ -68,32 +65,15 @@ public class ComicRepositoryTest {
   private static final Long TEST_COMIC_WITH_DELETED_PAGES = 1002L;
   private static final String TEST_IMPRINT = "This is an imprint";
   private static final Long TEST_USER_ID = 1000L;
-  private static final String TEST_IMAGE_FILE = "src/test/resources/example.jpg";
-  private static final String TEST_PUBLISHER_NAME_1 = "Warren";
-  private static final String TEST_PUBLISHER_NAME_2 = "Marvel";
-  private static final String TEST_SERIES_NAME_1 = "Creepy";
-  private static final String TEST_SERIES_NAME_2 = "Steve Rogers: Captain America";
-  private static final String TEST_CHARACTER_1 = "Lois Lane";
-  private static final String TEST_CHARACTER_2 = "Steve Rogers";
-  private static final String TEST_TEAM_1 = "SHIELD";
-  private static final String TEST_TEAM_2 = "The Daily Planet";
-  private static final String TEST_LOCATION_NAME_1 = "Genosha";
-  private static final String TEST_LOCATION_NAME_2 = "The Fortress Of Solitude";
-  private static final String TEST_STORY_NAME_1 = "Civil War II";
-  private static final String TEST_STORY_NAME_2 = "Prelude To Civil War II";
-  private static final long TEST_LAST_UPDATE_MIDDLE_OF_LIBRARY =
-      new GregorianCalendar(2017, 6 - 1, 14, 15, 20).getTimeInMillis();
-  private static final long TEST_LAST_COMIC_ID = 1001L;
   private static final long TEST_INVALID_ID = 9797L;
-  private static byte[] TEST_IMAGE_CONTENT;
-
-  static {
-    try {
-      TEST_IMAGE_CONTENT = FileUtils.readFileToByteArray(new File(TEST_IMAGE_FILE));
-    } catch (IOException error) {
-      error.printStackTrace();
-    }
-  }
+  private static final String TEST_SERIES = "Steve Rogers: Captain America";
+  private static final String TEST_VOLUME = "2017";
+  private static final String TEST_ISSUE_WITH_NO_NEXT = "513";
+  private static final String TEST_ISSUE_WITH_NEXT = "512";
+  private static final Long TEST_NEXT_ISSUE_ID = 1001L;
+  private static final Long TEST_PREV_ISSUE_ID = 1000L;
+  private static final String TEST_ISSUE_WITH_NO_PREV = "512";
+  private static final String TEST_ISSUE_WITH_PREV = "513";
 
   @Autowired private ComicRepository repository;
   @Autowired private PageTypeRepository pageTypeRepository;
@@ -448,14 +428,25 @@ public class ComicRepositoryTest {
   }
 
   @Test
-  public void testGetComicsUpdatedSinceDateFirstRequest() {
-    List<Comic> result =
-        this.repository.getComicsUpdatedSinceDate(new Date(0L), 0, PageRequest.of(0, 100));
+  public void testGetLibraryUpdatesFirstRequest() {
+    List<Comic> result = this.repository.getLibraryUpdates(new Date(0L), PageRequest.of(0, 100));
 
     assertNotNull(result);
     assertFalse(result.isEmpty());
     assertEquals(4, result.size());
     testComicOrder(0L, 0L, result);
+  }
+
+  @Test
+  public void testGetLibraryUpdatesSubsequentRequest() {
+    final Comic lastComic = this.repository.getById(1002L);
+    final Date timestamp = lastComic.getDateLastUpdated();
+    final List<Comic> result = this.repository.getLibraryUpdates(timestamp, PageRequest.of(0, 100));
+
+    testComicOrder(0, timestamp.getTime(), result);
+    assertNotNull(result);
+    assertFalse(result.isEmpty());
+    assertEquals(2, result.size());
   }
 
   private void testComicOrder(long id, long timestamp, List<Comic> comicList) {
@@ -465,35 +456,13 @@ public class ComicRepositoryTest {
 
       if (thisTimestamp == timestamp) {
         assertTrue(id < thisId);
+        id = thisId;
       } else {
         assertTrue(timestamp < thisTimestamp);
         timestamp = thisTimestamp;
+        id = 0L;
       }
-      id = thisId;
     }
-  }
-
-  @Test
-  public void testGetComicsUpdatedSinceDateSubsequentRequest() {
-    List<Comic> result =
-        this.repository.getComicsUpdatedSinceDate(
-            new Date(TEST_LAST_UPDATE_MIDDLE_OF_LIBRARY),
-            TEST_LAST_COMIC_ID,
-            PageRequest.of(0, 100));
-
-    assertNotNull(result);
-    assertFalse(result.isEmpty());
-    testComicOrder(TEST_LAST_COMIC_ID, TEST_LAST_UPDATE_MIDDLE_OF_LIBRARY, result);
-  }
-
-  @Test
-  public void testGetComicsUpdatedSinceDateNoUpdates() {
-    List<Comic> result =
-        this.repository.getComicsUpdatedSinceDate(
-            new Date(), TEST_LAST_COMIC_ID, PageRequest.of(0, 100));
-
-    assertNotNull(result);
-    assertTrue(result.isEmpty());
   }
 
   @Test
@@ -509,5 +478,39 @@ public class ComicRepositoryTest {
 
     assertNotNull(result);
     assertFalse(result.getPages().isEmpty());
+  }
+
+  @Test
+  public void testGetNextForComicWithNone() {
+    final Comic result =
+        this.repository.findFirstSucceedingComic(TEST_SERIES, TEST_VOLUME, TEST_ISSUE_WITH_NO_NEXT);
+
+    assertNull(result);
+  }
+
+  @Test
+  public void testGetNextForComic() {
+    final Comic result =
+        this.repository.findFirstSucceedingComic(TEST_SERIES, TEST_VOLUME, TEST_ISSUE_WITH_NEXT);
+
+    assertNotNull(result);
+    assertEquals(TEST_NEXT_ISSUE_ID, result.getId());
+  }
+
+  @Test
+  public void testGetPreviousForComicWithNone() {
+    final Comic result =
+        this.repository.findFirstPreviousComic(TEST_SERIES, TEST_VOLUME, TEST_ISSUE_WITH_NO_PREV);
+
+    assertNull(result);
+  }
+
+  @Test
+  public void testGetPreviousForComic() {
+    final Comic result =
+        this.repository.findFirstPreviousComic(TEST_SERIES, TEST_VOLUME, TEST_ISSUE_WITH_PREV);
+
+    assertNotNull(result);
+    assertEquals(TEST_PREV_ISSUE_ID, result.getId());
   }
 }
